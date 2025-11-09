@@ -10,18 +10,15 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="Portfolio Analyzer SQX - Drawdown Correlation", layout="wide")
 st.title("🎯 Portfolio Analyzer SQX - Correlación por Drawdown")
-st.markdown("**Análisis de correlación de estrategias basado en sincronización de drawdowns**")
+st.markdown("**Análisis avanzado de correlación de estrategias basado en sincronización de drawdowns**")
 
 # ========================================================================
 # FUNCIONES DE CÁLCULO
 # ========================================================================
 
 def parse_sqx_csv(uploaded_file):
-    """
-    Lee CSV exportado directamente de SQX
-    """
+    """Lee CSV exportado directamente de SQX"""
     try:
-        # Intentar múltiples separadores
         for sep in [';', ',', '\t']:
             try:
                 df = pd.read_csv(uploaded_file, sep=sep, encoding='utf-8')
@@ -31,10 +28,8 @@ def parse_sqx_csv(uploaded_file):
                 uploaded_file.seek(0)
                 continue
         
-        # Limpiar nombres de columnas
         df.columns = df.columns.str.strip().str.replace('"', '').str.lower()
         
-        # Renombrar columnas esperadas
         rename_map = {
             'open time': 'open_time',
             'open price': 'open_price',
@@ -45,13 +40,11 @@ def parse_sqx_csv(uploaded_file):
         }
         df = df.rename(columns=rename_map)
         
-        # Convertir tipos
         df['open_time'] = pd.to_datetime(df['open_time'], errors='coerce')
         df['close_time'] = pd.to_datetime(df['close_time'], errors='coerce')
         df['pnl'] = pd.to_numeric(df['pnl'], errors='coerce')
         df['balance'] = pd.to_numeric(df['balance'], errors='coerce')
         
-        # Ordenar por tiempo
         df = df.sort_values('close_time').reset_index(drop=True)
         
         return df[['open_time', 'close_time', 'symbol', 'type', 'volume', 
@@ -62,21 +55,16 @@ def parse_sqx_csv(uploaded_file):
         return None
 
 def calculate_drawdown_series(pnl_series):
-    """
-    Calcula la serie de drawdown para una estrategia
-    """
+    """Calcula la serie de drawdown"""
     cumulative = pnl_series.cumsum()
     running_max = cumulative.cummax()
     drawdown = running_max - cumulative
-    
-    # Normalizado (% del peak)
     drawdown_pct = (drawdown / running_max.replace(0, np.nan)) * 100
     drawdown_pct = drawdown_pct.fillna(0)
-    
     return drawdown, drawdown_pct, running_max
 
 def calculate_strategy_metrics(df):
-    """Calcula métricas principales de una estrategia"""
+    """Calcula métricas principales"""
     pnl = df['pnl'].fillna(0)
     
     total_pnl = pnl.sum()
@@ -87,12 +75,10 @@ def calculate_strategy_metrics(df):
     losses = abs(pnl[pnl < 0].sum())
     pf = gains / losses if losses > 0 else (np.inf if gains > 0 else 0)
     
-    # Drawdown
     cumulative = pnl.cumsum()
     running_max = cumulative.cummax()
     max_dd = (running_max - cumulative).max()
     
-    # Sharpe (trades)
     if pnl.std() > 0:
         sharpe = pnl.mean() / pnl.std() * np.sqrt(252)
     else:
@@ -109,9 +95,7 @@ def calculate_strategy_metrics(df):
     }
 
 def calculate_dd_correlation_methods(strategies_dict):
-    """
-    VERSIÓN CORREGIDA: Maneja diferentes longitudes de series
-    """
+    """Calcula correlaciones de drawdown (VERSIÓN CORREGIDA)"""
     
     strategy_names = list(strategies_dict.keys())
     n = len(strategy_names)
@@ -126,14 +110,12 @@ def calculate_dd_correlation_methods(strategies_dict):
         'drawdown_pct': {},
     }
     
-    # Calcular series de drawdown para cada estrategia
     for strat_name, df in strategies_dict.items():
         pnl = df['pnl'].fillna(0).values
         dd, dd_pct, _ = calculate_drawdown_series(pd.Series(pnl))
         results['drawdown_series'][strat_name] = dd.values
         results['drawdown_pct'][strat_name] = dd_pct.values
     
-    # Calcular correlaciones entre pares
     for i, strat1 in enumerate(strategy_names):
         for j, strat2 in enumerate(strategy_names):
             if i == j:
@@ -146,12 +128,11 @@ def calculate_dd_correlation_methods(strategies_dict):
                 dd1 = results['drawdown_pct'][strat1]
                 dd2 = results['drawdown_pct'][strat2]
                 
-                # ✅ CORRECCIÓN: Alinear series de diferentes longitudes
+                # ✅ CORRECCIÓN: Alinear series
                 min_len = min(len(dd1), len(dd2))
                 dd1_aligned = dd1[:min_len]
                 dd2_aligned = dd2[:min_len]
                 
-                # Método 1: Correlación Pearson de series de DD
                 if min_len > 1:
                     try:
                         pearson_val, _ = pearsonr(dd1_aligned, dd2_aligned)
@@ -165,7 +146,6 @@ def calculate_dd_correlation_methods(strategies_dict):
                     except:
                         results['spearman'][i, j] = 0
                 
-                # Método 2: Ratio de sincronización
                 in_dd1 = dd1_aligned > 0.5
                 in_dd2 = dd2_aligned > 0.5
                 simultaneous_dd = (in_dd1 & in_dd2).sum()
@@ -173,11 +153,9 @@ def calculate_dd_correlation_methods(strategies_dict):
                 sync_ratio = simultaneous_dd / any_dd if any_dd > 0 else 0
                 results['sync_ratio'][i, j] = sync_ratio
                 
-                # Método 3: % tiempo en DD conjunto
                 joint_dd = (in_dd1 & in_dd2).sum() / min_len * 100 if min_len > 0 else 0
                 results['joint_dd_pct'][i, j] = joint_dd
                 
-                # Método 4: Correlación de timing de picos DD
                 dd1_peaks = (dd1_aligned > np.roll(dd1_aligned, 1)) & (dd1_aligned > np.roll(dd1_aligned, -1))
                 dd2_peaks = (dd2_aligned > np.roll(dd2_aligned, 1)) & (dd2_aligned > np.roll(dd2_aligned, -1))
                 shared_peaks = (dd1_peaks & dd2_peaks).sum()
@@ -187,10 +165,158 @@ def calculate_dd_correlation_methods(strategies_dict):
     
     return results, strategy_names
 
+def calculate_rolling_dd_correlation(strategies_dict, window_size=30, method='pearson'):
+    """Correlación dinámica en ventanas móviles"""
+    
+    strategy_names = list(strategies_dict.keys())
+    
+    if len(strategy_names) < 2:
+        return None, None
+    
+    strat1_name = strategy_names[0]
+    strat2_name = strategy_names[1]
+    
+    df1 = strategies_dict[strat1_name]
+    df2 = strategies_dict[strat2_name]
+    
+    pnl1 = df1['pnl'].fillna(0).values
+    pnl2 = df2['pnl'].fillna(0).values
+    
+    _, dd_pct1, _ = calculate_drawdown_series(pd.Series(pnl1))
+    _, dd_pct2, _ = calculate_drawdown_series(pd.Series(pnl2))
+    
+    min_len = min(len(dd_pct1), len(dd_pct2))
+    dd_pct1 = dd_pct1[:min_len].values
+    dd_pct2 = dd_pct2[:min_len].values
+    
+    correlations = []
+    periods = []
+    dates = []
+    
+    for i in range(window_size, min_len):
+        window_dd1 = dd_pct1[i-window_size:i]
+        window_dd2 = dd_pct2[i-window_size:i]
+        
+        try:
+            if method == 'pearson':
+                corr, _ = pearsonr(window_dd1, window_dd2)
+            elif method == 'spearman':
+                corr, _ = spearmanr(window_dd1, window_dd2)
+            elif method == 'sync_ratio':
+                in_dd1 = window_dd1 > 0.5
+                in_dd2 = window_dd2 > 0.5
+                simultaneous = (in_dd1 & in_dd2).sum()
+                any_dd = (in_dd1 | in_dd2).sum()
+                corr = simultaneous / any_dd if any_dd > 0 else 0
+            else:
+                corr = 0
+        except:
+            corr = 0
+        
+        correlations.append(corr)
+        periods.append(i)
+        
+        if 'close_time' in df1.columns and i < len(df1):
+            dates.append(df1['close_time'].iloc[i])
+        else:
+            dates.append(None)
+    
+    result_df = pd.DataFrame({
+        'trade_number': periods,
+        'correlation': correlations,
+        'date': dates
+    })
+    
+    metadata = {
+        'strat1': strat1_name,
+        'strat2': strat2_name,
+        'window_size': window_size,
+        'method': method
+    }
+    
+    return result_df, metadata
+
+def calculate_monthly_dd_correlation(strategies_dict, method='pearson'):
+    """Correlación agrupada por mes"""
+    
+    strategy_names = list(strategies_dict.keys())
+    
+    if len(strategy_names) < 2:
+        return None, None
+    
+    strat1_name = strategy_names[0]
+    strat2_name = strategy_names[1]
+    
+    df1 = strategies_dict[strat1_name].copy()
+    df2 = strategies_dict[strat2_name].copy()
+    
+    if 'close_time' not in df1.columns or 'close_time' not in df2.columns:
+        return None, None
+    
+    pnl1 = df1['pnl'].fillna(0)
+    pnl2 = df2['pnl'].fillna(0)
+    
+    _, dd_pct1, _ = calculate_drawdown_series(pnl1)
+    _, dd_pct2, _ = calculate_drawdown_series(pnl2)
+    
+    df1['dd_pct'] = dd_pct1.values
+    df2['dd_pct'] = dd_pct2.values
+    
+    df1['month'] = pd.to_datetime(df1['close_time']).dt.to_period('M')
+    df2['month'] = pd.to_datetime(df2['close_time']).dt.to_period('M')
+    
+    monthly_corrs = []
+    
+    months1 = set(df1['month'].dropna())
+    months2 = set(df2['month'].dropna())
+    common_months = sorted(months1 & months2)
+    
+    for month in common_months:
+        dd1_month = df1[df1['month'] == month]['dd_pct'].values
+        dd2_month = df2[df2['month'] == month]['dd_pct'].values
+        
+        min_len = min(len(dd1_month), len(dd2_month))
+        if min_len < 5:
+            continue
+        
+        dd1_month = dd1_month[:min_len]
+        dd2_month = dd2_month[:min_len]
+        
+        try:
+            if method == 'pearson':
+                corr, _ = pearsonr(dd1_month, dd2_month)
+            elif method == 'spearman':
+                corr, _ = spearmanr(dd1_month, dd2_month)
+            elif method == 'sync_ratio':
+                in_dd1 = dd1_month > 0.5
+                in_dd2 = dd2_month > 0.5
+                simultaneous = (in_dd1 & in_dd2).sum()
+                any_dd = (in_dd1 | in_dd2).sum()
+                corr = simultaneous / any_dd if any_dd > 0 else 0
+            else:
+                corr = 0
+        except:
+            corr = 0
+        
+        monthly_corrs.append({
+            'month': str(month),
+            'correlation': corr,
+            'n_trades_1': len(dd1_month),
+            'n_trades_2': len(dd2_month)
+        })
+    
+    result_df = pd.DataFrame(monthly_corrs)
+    
+    metadata = {
+        'strat1': strat1_name,
+        'strat2': strat2_name,
+        'method': method
+    }
+    
+    return result_df, metadata
+
 def portfolio_allocation_minimum_dd(strategies_dict, method='uniform'):
-    """
-    Sugiere asignación de portafolio basada en minimizar DD agregado
-    """
+    """Sugiere asignación de portafolio"""
     
     metrics = {}
     for name, df in strategies_dict.items():
@@ -230,9 +356,8 @@ def portfolio_allocation_minimum_dd(strategies_dict, method='uniform'):
         return {name: w/total for name, w in allocations.items()}
 
 def portfolio_combined_metrics(strategies_dict, weights):
-    """
-    Calcula métricas del portafolio combinado
-    """
+    """Calcula métricas del portafolio combinado"""
+    
     total_pnl = 0
     pnl_combined = []
     
@@ -265,8 +390,6 @@ def portfolio_combined_metrics(strategies_dict, weights):
 # ========================================================================
 
 st.sidebar.header("📁 Cargar Estrategias")
-st.sidebar.markdown("Sube múltiples CSV de SQX para análisis de portafolio")
-
 uploaded_files = st.sidebar.file_uploader(
     "📤 Selecciona archivos CSV (SQX export)",
     type=['csv'],
@@ -277,7 +400,6 @@ if not uploaded_files:
     st.info("⏳ Carga al menos 2 archivos CSV de estrategias para comenzar")
     st.stop()
 
-# Parsear archivos
 strategies_dict = {}
 for uploaded_file in uploaded_files:
     df = parse_sqx_csv(uploaded_file)
@@ -286,22 +408,27 @@ for uploaded_file in uploaded_files:
         strategies_dict[strat_name] = df
 
 if len(strategies_dict) < 2:
-    st.error("❌ Se necesitan al menos 2 estrategias válidas para análisis de portafolio")
+    st.error("❌ Se necesitan al menos 2 estrategias válidas")
     st.stop()
 
 st.success(f"✅ {len(strategies_dict)} estrategias cargadas correctamente")
 
 # ========================================================================
-# TAB 1: RESUMEN DE ESTRATEGIAS
+# TABS
 # ========================================================================
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Resumen", 
     "🔗 Correlación DD", 
+    "📈 Correlación Dinámica",
     "🎯 Portfolio Optimizer",
-    "📈 Análisis Detallado",
+    "📊 Análisis Detallado",
     "💡 Insights"
 ])
+
+# ========================================================================
+# TAB 1: RESUMEN
+# ========================================================================
 
 with tab1:
     st.header("Resumen de Estrategias Individuales")
@@ -333,7 +460,6 @@ with tab1:
         height=400
     )
     
-    # Gráficos de resumen
     col1, col2 = st.columns(2)
     
     with col1:
@@ -351,32 +477,28 @@ with tab1:
         st.pyplot(fig, use_container_width=True)
 
 # ========================================================================
-# TAB 2: CORRELACIÓN DE DRAWDOWN
+# TAB 2: CORRELACIÓN DD
 # ========================================================================
 
 with tab2:
     st.header("🔗 Análisis de Correlación por Drawdown")
     
-    # Calcular correlaciones
-    corr_results, strat_names = calculate_dd_correlation_methods(strategies_dict)
-    
     st.markdown("""
-    ### Métodos de Correlación Disponibles:
+    ### Métodos de Correlación:
     - **Pearson**: Correlación lineal de series de DD
-    - **Spearman**: Correlación no-paramétrica (ranks)
-    - **Sync Ratio**: % de tiempo en DD sincronizadas
-    - **Joint DD %**: % tiempo ambas en drawdown simultáneamente
+    - **Spearman**: Correlación no-paramétrica
+    - **Sync Ratio**: % tiempo en DD sincronizadas
+    - **Joint DD %**: % tiempo en drawdown conjunto
     - **DD Timing**: Correlación de picos de DD
     """)
     
-    # Selector de método
     corr_method = st.selectbox(
         "Selecciona método de correlación:",
         ['pearson', 'spearman', 'sync_ratio', 'joint_dd_pct', 'dd_timing'],
-        help="Diferentes perspectivas del riesgo correlacionado"
     )
     
-    # Obtener matriz seleccionada
+    corr_results, strat_names = calculate_dd_correlation_methods(strategies_dict)
+    
     if corr_method == 'pearson':
         corr_matrix = corr_results['pearson']
         title = "Correlación Pearson - DD Series"
@@ -393,7 +515,6 @@ with tab2:
         corr_matrix = corr_results['dd_timing']
         title = "Correlación de Timing de Picos DD"
     
-    # Heatmap
     fig, ax = plt.subplots(figsize=(10, 8))
     sns.heatmap(
         corr_matrix,
@@ -408,10 +529,8 @@ with tab2:
     )
     plt.title(title, fontsize=14, fontweight='bold')
     plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
     st.pyplot(fig, use_container_width=True)
     
-    # Matriz como tabla
     st.markdown("### Matriz de Correlación")
     corr_df = pd.DataFrame(corr_matrix, index=strat_names, columns=strat_names)
     st.dataframe(
@@ -419,49 +538,170 @@ with tab2:
         use_container_width=True
     )
     
-    # Análisis de pares
-    st.markdown("### Análisis de Pares (Correlación más baja = mejor diversificación)")
+    st.markdown("### Análisis de Pares")
     
     pairs_data = []
-    for i, s1 in enumerate(strat_names):
-        for j, s2 in enumerate(strat_names):
-            if i < j:
-                pairs_data.append({
-                    'Estrategia 1': s1,
-                    'Estrategia 2': s2,
-                    'Pearson': corr_results['pearson'][i, j],
-                    'Spearman': corr_results['spearman'][i, j],
-                    'Sync Ratio': corr_results['sync_ratio'][i, j],
-                    'Joint DD %': corr_results['joint_dd_pct'][i, j],
-                    'DD Timing': corr_results['dd_timing'][i, j],
-                })
+    n = len(strat_names)
+    for i in range(n):
+        for j in range(i+1, n):
+            pairs_data.append({
+                'Estrategia 1': strat_names[i],
+                'Estrategia 2': strat_names[j],
+                'Pearson': corr_results['pearson'][i, j],
+                'Spearman': corr_results['spearman'][i, j],
+                'Sync Ratio': corr_results['sync_ratio'][i, j],
+                'Joint DD %': corr_results['joint_dd_pct'][i, j],
+                'DD Timing': corr_results['dd_timing'][i, j],
+            })
     
     pairs_df = pd.DataFrame(pairs_data).sort_values('Pearson')
     st.dataframe(
-        pairs_df.style.format({col: '{:.3f}' for col in pairs_df.columns if col != 'Estrategia 1' and col != 'Estrategia 2'}),
+        pairs_df.style.format({col: '{:.3f}' for col in pairs_df.columns if col not in ['Estrategia 1', 'Estrategia 2']}),
         use_container_width=True,
         height=400
     )
 
 # ========================================================================
-# TAB 3: PORTFOLIO OPTIMIZER
+# TAB 3: CORRELACIÓN DINÁMICA
 # ========================================================================
 
 with tab3:
+    st.header("📈 Correlación Dinámica de Drawdowns")
+    
+    st.markdown("""
+    **Objetivo:** Analizar cómo cambia la correlación a lo largo del tiempo.
+    - ✅ Detectar cambios de régimen de mercado
+    - ✅ Identificar períodos de alta/baja correlación
+    - ✅ Optimizar portfolio según comportamiento histórico
+    """)
+    
+    if len(strategies_dict) < 2:
+        st.warning("Se necesitan al menos 2 estrategias")
+        st.stop()
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        analysis_type = st.selectbox(
+            "Tipo de análisis:",
+            ['Rolling (ventana móvil)', 'Mensual'],
+        )
+    
+    with col2:
+        if analysis_type == 'Rolling (ventana móvil)':
+            window_size = st.slider(
+                "Tamaño ventana (trades):",
+                min_value=10,
+                max_value=200,
+                value=30,
+                step=10,
+            )
+        else:
+            window_size = 30
+    
+    with col3:
+        corr_method_dynamic = st.selectbox(
+            "Método:",
+            ['pearson', 'spearman', 'sync_ratio'],
+        )
+    
+    temp_dict = {list(strategies_dict.keys())[0]: strategies_dict[list(strategies_dict.keys())[0]],
+                 list(strategies_dict.keys())[1]: strategies_dict[list(strategies_dict.keys())[1]]}
+    
+    if analysis_type == 'Rolling (ventana móvil)':
+        result_df, metadata = calculate_rolling_dd_correlation(
+            temp_dict, 
+            window_size=window_size, 
+            method=corr_method_dynamic
+        )
+    else:
+        result_df, metadata = calculate_monthly_dd_correlation(
+            temp_dict,
+            method=corr_method_dynamic
+        )
+    
+    if result_df is None or result_df.empty:
+        st.warning("No hay suficientes datos")
+        st.stop()
+    
+    st.markdown("### Estadísticas de Correlación Dinámica")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Correlación Promedio", f"{result_df['correlation'].mean():.3f}")
+    with col2:
+        st.metric("Correlación Máxima", f"{result_df['correlation'].max():.3f}")
+    with col3:
+        st.metric("Correlación Mínima", f"{result_df['correlation'].min():.3f}")
+    with col4:
+        st.metric("Desv. Estándar", f"{result_df['correlation'].std():.3f}")
+    
+    st.markdown("### Serie Temporal de Correlación")
+    
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    if analysis_type == 'Rolling (ventana móvil)':
+        x_values = result_df['trade_number']
+        x_label = 'Trade Number'
+    else:
+        x_values = range(len(result_df))
+        x_label = 'Período'
+    
+    ax.plot(x_values, result_df['correlation'], linewidth=2, color='steelblue', label='Correlación')
+    ax.axhline(y=result_df['correlation'].mean(), color='red', linestyle='--', linewidth=2, label='Promedio')
+    ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    ax.axhspan(0.7, 1.0, alpha=0.2, color='red', label='Alta correlación (>0.7)')
+    ax.axhspan(-1.0, 0.3, alpha=0.2, color='green', label='Baja correlación (<0.3)')
+    
+    ax.set_xlabel(x_label)
+    ax.set_ylabel('Correlación')
+    ax.set_title(f'Correlación Dinámica: {metadata["strat1"]} vs {metadata["strat2"]}')
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+    
+    st.pyplot(fig, use_container_width=True)
+    
+    st.markdown("### Detalle por Período")
+    
+    display_df = result_df.copy()
+    if analysis_type == 'Mensual':
+        display_df = display_df.sort_values('month', ascending=False)
+    else:
+        display_df = display_df.tail(50)
+    
+    st.dataframe(
+        display_df.style.format({'correlation': '{:.3f}'}).background_gradient(subset=['correlation'], cmap='RdYlGn_r'),
+        use_container_width=True,
+        height=400
+    )
+    
+    st.markdown("### Distribución de Correlaciones")
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(result_df['correlation'], bins=30, alpha=0.7, color='steelblue', edgecolor='black')
+    ax.axvline(result_df['correlation'].mean(), color='red', linestyle='--', linewidth=2, label='Promedio')
+    ax.set_xlabel('Correlación')
+    ax.set_ylabel('Frecuencia')
+    ax.set_title('Distribución de Correlaciones')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    st.pyplot(fig, use_container_width=True)
+
+# ========================================================================
+# TAB 4: PORTFOLIO OPTIMIZER
+# ========================================================================
+
+with tab4:
     st.header("🎯 Portfolio Optimizer")
     
     optimization_method = st.selectbox(
         "Método de optimización:",
         ['uniform', 'inverse_dd', 'sharpe', 'sortino'],
-        help="""
-        - Uniform: Igual peso para todas
-        - Inverse DD: Más peso a estrategias con menor DD
-        - Sharpe: Proporcional a Sharpe ratio
-        - Sortino: Proporcional a Sortino ratio
-        """
     )
     
-    # Calcular pesos
     weights = portfolio_allocation_minimum_dd(strategies_dict, method=optimization_method)
     
     st.markdown("### Asignación de Pesos Recomendada")
@@ -474,7 +714,6 @@ with tab3:
         use_container_width=True
     )
     
-    # Visualizar asignación
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.pie(
         weights_df['Peso %'],
@@ -485,7 +724,6 @@ with tab3:
     plt.title(f'Asignación de Portafolio - {optimization_method.upper()}')
     st.pyplot(fig, use_container_width=True)
     
-    # Métricas del portafolio
     st.markdown("### Métricas del Portafolio Combinado")
     
     portfolio_metrics = portfolio_combined_metrics(strategies_dict, weights)
@@ -502,24 +740,22 @@ with tab3:
         st.metric("Sharpe", f"{portfolio_metrics['sharpe']:.2f}")
 
 # ========================================================================
-# TAB 4: ANÁLISIS DETALLADO
+# TAB 5: ANÁLISIS DETALLADO
 # ========================================================================
 
-with tab4:
-    st.header("📈 Análisis Detallado de Estrategias")
+with tab5:
+    st.header("📊 Análisis Detallado de Estrategias")
     
     selected_strat = st.selectbox(
-        "Selecciona estrategia para análisis:",
+        "Selecciona estrategia:",
         list(strategies_dict.keys())
     )
     
     df_selected = strategies_dict[selected_strat]
-    
-    # Equity curve
-    st.markdown("### Curva de Equity")
     pnl = df_selected['pnl'].fillna(0)
     equity = pnl.cumsum()
     
+    st.markdown("### Curva de Equity")
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.plot(equity.values, linewidth=2, label='Equity')
     ax.fill_between(range(len(equity)), equity.values, alpha=0.3)
@@ -530,7 +766,6 @@ with tab4:
     ax.legend()
     st.pyplot(fig, use_container_width=True)
     
-    # Drawdown chart
     st.markdown("### Drawdown Analysis")
     dd, dd_pct, running_max = calculate_drawdown_series(pnl)
     
@@ -551,10 +786,10 @@ with tab4:
     st.pyplot(fig, use_container_width=True)
 
 # ========================================================================
-# TAB 5: INSIGHTS
+# TAB 6: INSIGHTS
 # ========================================================================
 
-with tab5:
+with tab6:
     st.header("💡 Insights y Recomendaciones")
     
     corr_results, strat_names = calculate_dd_correlation_methods(strategies_dict)
@@ -577,13 +812,11 @@ with tab5:
     st.markdown(f"""
     #### Pares de Estrategias:
     
-    **Mejor Diversificación (menor correlación):**
-    - {min_pair[0]} + {min_pair[1]}: Correlación = {min_corr:.3f}
-    - ✅ Recomendado para combinar
+    **Mejor Diversificación:**
+    - {min_pair[0]} + {min_pair[1]}: {min_corr:.3f} ✅
     
-    **Mayor Riesgo de Concentración (mayor correlación):**
-    - {max_pair[0]} + {max_pair[1]}: Correlación = {max_corr:.3f}
-    - ⚠️ Considerar reducir peso de una
+    **Mayor Riesgo:**
+    - {max_pair[0]} + {max_pair[1]}: {max_corr:.3f} ⚠️
     """)
     
     summary_data = []
@@ -596,34 +829,8 @@ with tab5:
     avg_sharpe = np.mean([m['sharpe'] for m in summary_data])
     
     st.markdown(f"""
-    #### Estadísticas de Portafolio:
-    
+    #### Estadísticas:
     - **PnL Promedio**: ${avg_pnl:.2f}
     - **DD Promedio**: ${avg_dd:.2f}
     - **Sharpe Promedio**: {avg_sharpe:.2f}
     """)
-    
-    st.markdown("#### Recomendaciones:")
-    
-    recommendations = []
-    
-    max_dd_strat = max(strategies_dict.keys(), key=lambda x: calculate_strategy_metrics(strategies_dict[x])['max_dd'])
-    max_dd_val = calculate_strategy_metrics(strategies_dict[max_dd_strat])['max_dd']
-    
-    if max_dd_val > avg_dd * 1.5:
-        recommendations.append(f"⚠️ **{max_dd_strat}** tiene DD muy alto ({max_dd_val:.2f}). Considerar reducir peso.")
-    
-    sharpes = {name: calculate_strategy_metrics(strategies_dict[name])['sharpe'] for name in strategies_dict.keys()}
-    best_sharpe = max(sharpes, key=sharpes.get)
-    
-    recommendations.append(f"✅ **{best_sharpe}** tiene mejor Sharpe. Considerar aumentar peso.")
-    
-    high_corr_pairs = sum(1 for i in range(n) for j in range(i+1, n) if corr_results['pearson'][i, j] > 0.7)
-    
-    if high_corr_pairs > 0:
-        recommendations.append(f"⚠️ Existen {high_corr_pairs} pares altamente correlacionados. Revisar para evitar concentración de riesgo.")
-    else:
-        recommendations.append(f"✅ Baja correlación general entre estrategias. Buena diversificación.")
-    
-    for rec in recommendations:
-        st.markdown(rec)
